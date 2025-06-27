@@ -13,6 +13,8 @@ AChunkBase::AChunkBase()
 	Mesh = CreateDefaultSubobject<UProceduralMeshComponent>("Mesh");
 	Noise = new FastNoiseLite();
 	BiomeNoise = new FastNoiseLite();
+	RiverNoise = new FastNoiseLite();
+	LakeNoise = new FastNoiseLite();
 	
 
 	// Mesh Settings
@@ -33,22 +35,44 @@ void AChunkBase::BeginPlay()
 	Noise->SetFrequency(Frequency);
 	Noise->SetNoiseType(FastNoiseLite::NoiseType_Perlin);
 	Noise->SetFractalType(FastNoiseLite::FractalType_FBm);
+	RiverNoise->SetFractalOctaves(4); // Try 3–5
+
 
 	BiomeNoise->SetSeed(Seed + 1);
 	
 	BiomeNoise->SetFrequency(Frequency * 0.2f); // lower frequency for large biome patches
 	BiomeNoise->SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2); // different type = more biome variety
 	BiomeNoise->SetFractalType(FastNoiseLite::FractalType_None);
+	RiverNoise->SetFractalOctaves(4); // Try 3–5
+
+
+	RiverNoise->SetSeed(Seed + 1337); // unique river seed
+	
+	RiverNoise->SetFrequency(0.009f); // low frequency = longer, wider rivers
+	RiverNoise->SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+	RiverNoise->SetFractalType(FastNoiseLite::FractalType_FBm);
+	RiverNoise->SetFractalOctaves(4); // Try 3–5
+
+	LakeNoise->SetSeed(Seed + 42);
+
+	LakeNoise->SetFrequency(0.001f);
+	LakeNoise->SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+	LakeNoise->SetFractalType(FastNoiseLite::FractalType_FBm);
+	LakeNoise->SetFractalOctaves(4); // 3–5 is typical
+
 
 	Setup();
 	
 	GenerateHeightMap();
 
+	LoadChunkMap();
+	
 	ClearMesh();
 	
 	GenerateMesh();
 	
 	ApplyMesh();
+
 }
 
 void AChunkBase::GenerateHeightMap()

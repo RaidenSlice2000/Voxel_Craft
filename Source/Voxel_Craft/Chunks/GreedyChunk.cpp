@@ -8,30 +8,23 @@
 #include "Voxel_Craft/Utils/FastNoiseLite.h"
 
 TMap<FIntVector, AGreedyChunk*> AGreedyChunk::LoadedChunks;
+FIntVector GridCoord;
 
 void AGreedyChunk::Setup()
 {
-	int x = 0;
-	int y = 0;
-	int z = 0;
 	Blocks.SetNum(ChunkSize.X * ChunkSize.Y * ChunkSize.Z);
 	BlockMeta.SetNum(ChunkSize.X * ChunkSize.Y * ChunkSize.Z);
-	ChunkOrigin = FIntVector(x * ChunkSize.X, y * ChunkSize.Y, z * ChunkSize.Z);
-	
 
-	FIntVector ChunkCoords(FMath::FloorToInt(static_cast<float>(ChunkOrigin.X) / ChunkSize.X),
-							 FMath::FloorToInt(static_cast<float>(ChunkOrigin.Y) / ChunkSize.Y),
-							 FMath::FloorToInt(static_cast<float>(ChunkOrigin.Z) / ChunkSize.Z));
-	LoadedChunks.Add(ChunkCoords, this);
-	
 	if (!Noise) Noise = new FastNoiseLite();
 	if (!BiomeNoise) BiomeNoise = new FastNoiseLite();
+	if (!RiverNoise) RiverNoise = new FastNoiseLite();
+	if (!LakeNoise) LakeNoise = new FastNoiseLite();
+	
 	BiomeSettingsMap.Add(EBiomeType::Desert,   {0.01f, 0.2f, -5.0f});
 	BiomeSettingsMap.Add(EBiomeType::Plains,   {0.02f, 0.4f, 0.0f});
 	BiomeSettingsMap.Add(EBiomeType::Forest,   {0.02f, 0.5f, 2.0f});
 	BiomeSettingsMap.Add(EBiomeType::Mountain, {0.005f, 1.2f, 10.0f});
 	BiomeSettingsMap.Add(EBiomeType::Snowy,    {0.007f, 1.0f, 12.0f});
-
 }
 
 struct FBiomeRange
@@ -92,9 +85,6 @@ void AGreedyChunk::Generate2DHeightMap(const FVector Position)
 		{
 			const float Xpos = FMath::FloorToFloat(x + Position.X);  
 			const float Ypos = FMath::FloorToFloat(y + Position.Y);
-
-
-			
 			
 			const float BiomeValue = BiomeNoise->GetNoise(Xpos * 0.05f, Ypos * 0.05f);
             // Normalize biome noise to 0.0-1.0 range
@@ -199,6 +189,100 @@ void AGreedyChunk::Generate2DHeightMap(const FVector Position)
 		}
 	}
 
+		// Build a heightmap for fast surface Z lookup
+	TArray<TArray<int>> HeightMap;
+	HeightMap.SetNum(ChunkSize.X);
+	for (int x = 0; x < ChunkSize.X; ++x) {
+		HeightMap[x].SetNum(ChunkSize.Y);
+		for (int y = 0; y < ChunkSize.Y; ++y) HeightMap[x][y] = -1;
+	}
+	for (const FIntVector& surf : SurfacePositions) {
+		if (surf.X >= 0 && surf.X < ChunkSize.X && surf.Y >= 0 && surf.Y < ChunkSize.Y)
+			HeightMap[surf.X][surf.Y] = surf.Z;
+	}
+	 // --- LAKE GENERATION (with LakeNoise, more natural, not every chunk) ---
+	{
+		for (const FIntVector& surf : SurfacePositions)
+		{
+		    float worldX = surf.X + Position.X;
+		    float worldY = surf.Y + Position.Y;
+		    float lakeNoise = LakeNoise->GetNoise(worldX, worldY);
+
+		    if (lakeNoise < -0.35f && surf.Z < ChunkSize.Z * 0.8f) {
+		        if (FMath::FRand() > 0.15f) continue;
+
+		        int lakeRadius = FMath::RandRange(8, 14);
+		        int centerWaterLevel = surf.Z; // The "ideal" water level for the lake center
+
+		        for (int angle = 0; angle < 360; angle += 3) {
+		            float rad = FMath::DegreesToRadians(angle);
+		            float radiusOffset = LakeNoise->GetNoise(
+		                worldX + FMath::Cos(rad) * lakeRadius,
+		                worldY + FMath::Sin(rad) * lakeRadius
+		            ) * 3.0f;
+
+		            float finalRadius = lakeRadius + radiusOffset;
+
+		            for (float r = 0; r < finalRadius; r += 1.0f) {
+		                int lx = surf.X + FMath::RoundToInt(FMath::Cos(rad) * r);
+		                int ly = surf.Y + FMath::RoundToInt(FMath::Sin(rad) * r);
+		                if (lx < 0 || lx >= ChunkSize.X || ly < 0 || ly >= ChunkSize.Y) continue;
+
+		                // Use heightmap to find local surface Z
+		                int surfaceZ = HeightMap[lx][ly];
+		                if (surfaceZ < 0) continue; // Out of bounds
+
+		                // Calculate water level: usually min(centerWaterLevel, surfaceZ)
+		                // Option 1: Use centerWaterLevel for a flat lake surface
+		                // Option 2: Use min(centerWaterLevel, surfaceZ) to avoid floating water
+		                int waterLevel = FMath::Min(centerWaterLevel, surfaceZ);
+
+		                // Dig a depression (2 blocks deep), then fill with water
+		                for (int lz = waterLevel - 2; lz <= waterLevel; ++lz) {
+		                    if (lz >= 0 && lz < ChunkSize.Z) {
+		                        int idx = GetBlockIndex(lx, ly, lz);
+		                        EBlock b = Blocks[idx];
+		                        if (b == EBlock::Air || b == EBlock::Dirt || b == EBlock::Grass || b == EBlock::Sand) {
+		                            Blocks[idx] = EBlock::Water;
+		                            BlockMeta[idx] = 0;
+		                        }
+		                    }
+		                }
+		            }
+		        }
+		    }
+		}
+	}
+
+	// --- RIVER GENERATION (global, smooth, Minecraft-like) ---
+	float riverWidth = 0.07f;
+
+	for (int x = 0; x < ChunkSize.X; ++x) {
+		for (int y = 0; y < ChunkSize.Y; ++y) {
+			float riverNoiseScale = 0.3f;
+			float wx = x + Position.X;
+			float wy = y + Position.Y;
+
+			float riverNoise = FMath::Abs(RiverNoise->GetNoise(wx * riverNoiseScale, wy * riverNoiseScale));
+			if (riverNoise < riverWidth) {
+				int z = HeightMap[x][y];
+				if (z == -1) continue;
+
+				int riverBed = FMath::Max(z - 2, 0);
+				for (int dz = 0; dz <= 2; ++dz) {
+					int zz = riverBed + dz;
+					if (zz < ChunkSize.Z) {
+						int idx = GetBlockIndex(x, y, zz);
+						if (dz < 2) Blocks[idx] = EBlock::Dirt;
+						else        Blocks[idx] = EBlock::Water;
+						BlockMeta[idx] = 0;
+					}
+				}
+				 HeightMap[x][y] = riverBed + 2;
+			}
+		}
+	}
+	
 	// ---------- Tree & Cactus Placement ----------
 	FRandomStream ChunkRand(FMath::Abs(Seed) ^ (static_cast<int32>(Position.X) * 73856093) ^ (static_cast<int32>(Position.Y) * 19349663));
 	
@@ -284,11 +368,19 @@ void AGreedyChunk::Generate2DHeightMap(const FVector Position)
 				
 				if (CanPlaceVegetation && !TooClose)
 				{
+					int surfaceIdx = GetBlockIndex(x, y, z);
+					EBlock SurfaceBlock = Blocks[surfaceIdx];
+
+					// Only allow trees/cacti on solid non-water ground
+					bool ValidForTree =
+						(SurfaceBlock == EBlock::Grass || SurfaceBlock == EBlock::Dirt || SurfaceBlock == EBlock::Sand);
+					bool ValidForCactus = (SurfaceBlock == EBlock::Sand);
+
 					FRandomStream VegRand(ChunkRand.GetCurrentSeed() + i);
-					
-					if (Biome == EBiomeType::Forest || Biome == EBiomeType::Plains)
+
+					if ((Biome == EBiomeType::Forest || Biome == EBiomeType::Plains) && ValidForTree)
 						SpawnTreeAt(x, y, z, VegRand);
-					else if (Biome == EBiomeType::Desert)
+					else if (Biome == EBiomeType::Desert && ValidForCactus)
 						SpawnCactusAt(x, y, z+1);
 				}
 			}
@@ -356,11 +448,20 @@ void AGreedyChunk::GenerateMesh()
 			{
 				for (ChunkItr[Axis1] = 0; ChunkItr[Axis1] < Axis1Limit; ++ChunkItr[Axis1])
 				{
-					const auto CurrentBlock = GetBlock(ChunkItr);
-					const auto CompareBlock = GetBlock(ChunkItr + AxisMask);
+					FIntVector ComparePos = ChunkItr + AxisMask;
 
-					const bool CurrentBlockOpaque = CurrentBlock != EBlock::Air;
-					const bool CompareBlockOpaque = CompareBlock != EBlock::Air;
+					EBlock CurrentBlock = IsInsideChunk(ChunkItr)
+						? GetBlock(ChunkItr)
+						: GetBlockWithNeighbors(ChunkItr + ChunkOrigin);
+
+					EBlock CompareBlock = IsInsideChunk(ComparePos)
+						? GetBlock(ComparePos)
+						: GetBlockWithNeighbors(ComparePos + ChunkOrigin);
+					
+					const bool CurrentBlockIsSolid = (CurrentBlock != EBlock::Air && CurrentBlock != EBlock::Water);
+					const bool CompareBlockIsSolid = (CompareBlock != EBlock::Air && CompareBlock != EBlock::Water);
+					const bool CurrentBlockIsWater = (CurrentBlock == EBlock::Water);
+					const bool CompareBlockIsWater = (CompareBlock == EBlock::Water);
 
 					if ((CurrentBlock == EBlock::Log && CompareBlock == EBlock::Leaves))
 					{
@@ -368,19 +469,27 @@ void AGreedyChunk::GenerateMesh()
 					}
 					else if ((CompareBlock == EBlock::Log && CurrentBlock == EBlock::Leaves))
 					{
-						Mask[N++] = FMask{CompareBlock, -1}; 
+						Mask[N++] = FMask{CompareBlock, -1};
 					}
-					else if (CurrentBlockOpaque == CompareBlockOpaque)
+					else if (CurrentBlockIsSolid && (!CompareBlockIsSolid)) // land vs. air or land vs. water
 					{
-						Mask[N++] = FMask{EBlock::Null, 0}; 
+						Mask[N++] = FMask{CurrentBlock, 1};
 					}
-					else if (CurrentBlockOpaque)
+					else if (CurrentBlockIsWater && CompareBlock == EBlock::Air) // water vs. air
 					{
-						Mask[N++] = FMask{CurrentBlock, 1}; 
+						Mask[N++] = FMask{CurrentBlock, 1};
+					}
+					else if (CompareBlockIsSolid && (!CurrentBlockIsSolid)) // land vs. air or land vs. water (opposite direction)
+					{
+						Mask[N++] = FMask{CompareBlock, -1};
+					}
+					else if (CompareBlockIsWater && CurrentBlock == EBlock::Air) // water vs. air (opposite a direction)
+					{
+						Mask[N++] = FMask{CompareBlock, -1};
 					}
 					else
 					{
-						Mask[N++] = FMask{CompareBlock, -1}; 
+						Mask[N++] = FMask{EBlock::Null, 0}; // skip faces between solid/solid, water/water, or air/air
 					}
 				}
 			}
@@ -575,17 +684,57 @@ int AGreedyChunk::GetBlockIndex( int X,  int Y,  int Z) const
 	return Z * ChunkSize.Y * ChunkSize.X + Y * ChunkSize.X + X;
 }
 
-EBlock AGreedyChunk::GetBlock(const FIntVector Index) const
+void AGreedyChunk::InitializeChunkOrigin(const FIntVector& Coords)
 {
-	if (Index.X >= ChunkSize.X || Index.Y >= ChunkSize.Y || Index.Z >= ChunkSize.Z || Index.X < 0 || Index.Y < 0 || Index.Z < 0)
-		return EBlock::Air;
-	return Blocks[GetBlockIndex(Index.X, Index.Y, Index.Z)];
+	ChunkOrigin = FIntVector(Coords.X * ChunkSize.X, Coords.Y * ChunkSize.Y, Coords.Z * ChunkSize.Z);
+	
+
+	FIntVector ChunkCoords(FMath::FloorToInt(static_cast<float>(ChunkOrigin.X) / ChunkSize.X),
+							 FMath::FloorToInt(static_cast<float>(ChunkOrigin.Y) / ChunkSize.Y),
+							 FMath::FloorToInt(static_cast<float>(ChunkOrigin.Z) / ChunkSize.Z));
+	UE_LOG(LogTemp, Warning, TEXT("INITIALIZE ORIGIN: ChunkCoords (%d,%d,%d), ChunkOrigin (%d,%d,%d)"),
+		   ChunkCoords.X, ChunkCoords.Y, ChunkCoords.Z,
+		   ChunkOrigin.X, ChunkOrigin.Y, ChunkOrigin.Z);
+	LoadedChunks.Add(ChunkCoords, this);
+	
+}
+
+EBlock AGreedyChunk::GetBlock(const FIntVector LocalPos) const
+{
+	if (LocalPos.X >= 0 && LocalPos.X < ChunkSize.X &&
+	   LocalPos.Y >= 0 && LocalPos.Y < ChunkSize.Y &&
+	   LocalPos.Z >= 0 && LocalPos.Z < ChunkSize.Z)
+	{
+		return Blocks[GetBlockIndex(LocalPos.X, LocalPos.Y, LocalPos.Z)];
+	}
+
+	// Out of bounds: figure out neighbor chunk coordinates
+	FIntVector ChunkCoords(
+			FMath::FloorToInt(static_cast<float>(ChunkOrigin.X) / ChunkSize.X),
+			FMath::FloorToInt(static_cast<float>(ChunkOrigin.Y) / ChunkSize.Y),
+			FMath::FloorToInt(static_cast<float>(ChunkOrigin.Z) / ChunkSize.Z)
+	);
+	FIntVector NeighborCoords = ChunkCoords;
+
+	FIntVector NeighborLocalPos = LocalPos;
+	if (NeighborLocalPos.X < 0) { NeighborCoords.X -= 1; NeighborLocalPos.X += ChunkSize.X; }
+	if (NeighborLocalPos.X >= ChunkSize.X) { NeighborCoords.X += 1; NeighborLocalPos.X -= ChunkSize.X; }
+	if (NeighborLocalPos.Y < 0) { NeighborCoords.Y -= 1; NeighborLocalPos.Y += ChunkSize.Y; }
+	if (NeighborLocalPos.Y >= ChunkSize.Y) { NeighborCoords.Y += 1; NeighborLocalPos.Y -= ChunkSize.Y; }
+	if (NeighborLocalPos.Z < 0) { NeighborCoords.Z -= 1; NeighborLocalPos.Z += ChunkSize.Z; }
+	if (NeighborLocalPos.Z >= ChunkSize.Z) { NeighborCoords.Z += 1; NeighborLocalPos.Z -= ChunkSize.Z; }
+
+	if (auto* NeighborChunk = LoadedChunks.Find(NeighborCoords))
+	{
+		return (*NeighborChunk)->Blocks[GetBlockIndex(NeighborLocalPos.X, NeighborLocalPos.Y, NeighborLocalPos.Z)];
+	}
+	// If no neighbor chunk, treat as air (so the face is rendered)
+	return EBlock::Air;
 }
 
 void AGreedyChunk::SetWaterSimulator(FWaterSimulator* InSimulator)
 {
 		WaterSimulator = InSimulator;
-	UE_LOG(LogTemp, Warning, TEXT("✅ SetWaterSimulator called on %s"), *GetName());
 
 }
 
@@ -783,6 +932,11 @@ void AGreedyChunk::SpawnCactusAt(int x, int y, int z)
 	OriginalTopCactusBlocks.Add(top);
 }
 
+void AGreedyChunk::UpdateMesh()
+{
+	Super::UpdateMesh();
+}
+
 bool AGreedyChunk::IsInsideChunk(const FIntVector& LocalPos) const
 {
 	return LocalPos.X >= 0 && LocalPos.X < ChunkSize.X &&
@@ -792,8 +946,11 @@ bool AGreedyChunk::IsInsideChunk(const FIntVector& LocalPos) const
 EBlock AGreedyChunk::GetBlockWorld(const FIntVector& WorldPosition) const
 {
 	FIntVector Local = WorldPosition - ChunkOrigin;
+    UE_LOG(LogTemp, Warning, TEXT("GetBlockWorld called with Local: X=%d Y=%d Z=%d"), Local.X, Local.Y, Local.Z);
 	return GetBlock(Local);
+
 }
+
 uint8 AGreedyChunk::GetMeta(const FIntVector& Position) const
 {
 	FIntVector LocalPos = Position - ChunkOrigin;
@@ -814,12 +971,14 @@ uint8 AGreedyChunk::GetMeta(const FIntVector& Position) const
 
 AGreedyChunk* AGreedyChunk::GetChunkAt(const FIntVector& WorldBlockPosition, const FIntVector& ChunkSize)
 {
+	UE_LOG(LogTemp, Warning, TEXT("GetChunkAt called with WorldBlockPosition: (%d,%d,%d), ChunkSize: (%d,%d,%d)"),
+		WorldBlockPosition.X, WorldBlockPosition.Y, WorldBlockPosition.Z,
+		ChunkSize.X, ChunkSize.Y, ChunkSize.Z);
 	int32 ChunkX = FMath::FloorToInt(static_cast<float>(WorldBlockPosition.X) / ChunkSize.X);
 	int32 ChunkY = FMath::FloorToInt(static_cast<float>(WorldBlockPosition.Y) / ChunkSize.Y);
 	int32 ChunkZ = FMath::FloorToInt(static_cast<float>(WorldBlockPosition.Z) / ChunkSize.Z);
-
 	FIntVector ChunkCoords(ChunkX, ChunkY, ChunkZ);
-
+	UE_LOG(LogTemp, Warning, TEXT("Calculated ChunkCoords: (%d,%d,%d)"), ChunkX, ChunkY, ChunkZ);
 	if (AGreedyChunk::LoadedChunks.Contains(ChunkCoords))
 	{
 		return AGreedyChunk::LoadedChunks[ChunkCoords];
@@ -828,9 +987,15 @@ AGreedyChunk* AGreedyChunk::GetChunkAt(const FIntVector& WorldBlockPosition, con
 }
 void AGreedyChunk::SetBlockAt(const FIntVector& Position, EBlock BlockType)
 {
+	
 	FIntVector LocalPos = Position - ChunkOrigin;
 	if (!IsInsideChunk(LocalPos))
+	{
+		// Neighbor logic
+		if (AGreedyChunk* NeighborChunk = AGreedyChunk::GetChunkAt(Position, ChunkSize))
+			NeighborChunk->SetBlockAt(Position, BlockType);
 		return;
+	}
 	int32 Index = LocalPos.Z * ChunkSize.X * ChunkSize.Y + LocalPos.Y * ChunkSize.X + LocalPos.X;
 	Blocks[Index] = BlockType;
 }
@@ -840,7 +1005,48 @@ void AGreedyChunk::SetMeta(const FIntVector& Position, uint8 MetaValue)
 	FIntVector LocalPos = Position - ChunkOrigin;
 	
 	if (!IsInsideChunk(LocalPos))
-		return;
+	  {
+		  if (AGreedyChunk* NeighborChunk = AGreedyChunk::GetChunkAt(Position, ChunkSize))
+            NeighborChunk->SetMeta(Position, MetaValue);
+        return;
+    }
 	int32 Index = LocalPos.Z * ChunkSize.X * ChunkSize.Y + LocalPos.Y * ChunkSize.X + LocalPos.X;
 	BlockMeta[Index] = MetaValue;
+}
+void AGreedyChunk::LoadChunkMap()
+{
+	InitializeChunkOrigin(GridCoord);
+	FIntVector ChunkCoords(
+	   FMath::FloorToInt(static_cast<float>(ChunkOrigin.X) / ChunkSize.X),
+	   FMath::FloorToInt(static_cast<float>(ChunkOrigin.Y) / ChunkSize.Y),
+	   FMath::FloorToInt(static_cast<float>(ChunkOrigin.Z) / ChunkSize.Z)
+   );
+	LoadedChunks.Add(ChunkCoords, this);
+	UE_LOG(LogTemp, Warning, TEXT("LoadedChunks Add Key: (%d, %d, %d)"), ChunkCoords.X, ChunkCoords.Y, ChunkCoords.Z);
+}
+EBlock AGreedyChunk::GetBlockWithNeighbors(const FIntVector& Pos) const
+{
+	if (IsInsideChunk(Pos))
+	{
+		return Blocks[GetBlockIndex(Pos.X, Pos.Y, Pos.Z)];
+	}
+
+	// Convert global Pos to the chunk that contains it
+	FIntVector WorldPos = ChunkOrigin + Pos;
+	int32 NeighborX = FMath::FloorToInt(static_cast<float>(WorldPos.X) / ChunkSize.X);
+	int32 NeighborY = FMath::FloorToInt(static_cast<float>(WorldPos.Y) / ChunkSize.Y);
+	int32 NeighborZ = FMath::FloorToInt(static_cast<float>(WorldPos.Z) / ChunkSize.Z);
+
+	FIntVector NeighborChunkCoords(NeighborX, NeighborY, NeighborZ);
+	AGreedyChunk** NeighborChunkPtr = LoadedChunks.Find(NeighborChunkCoords);
+	if (!NeighborChunkPtr || !*NeighborChunkPtr) return EBlock::Air;
+
+	AGreedyChunk* NeighborChunk = *NeighborChunkPtr;
+
+	// Get local position relative to that neighbor chunk
+	FIntVector LocalPos = WorldPos - NeighborChunk->ChunkOrigin;
+
+	if (!NeighborChunk->IsInsideChunk(LocalPos)) return EBlock::Air;
+
+	return NeighborChunk->Blocks[NeighborChunk->GetBlockIndex(LocalPos.X, LocalPos.Y, LocalPos.Z)];
 }

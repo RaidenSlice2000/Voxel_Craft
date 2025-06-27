@@ -51,9 +51,7 @@ private:
 	APawn* PlayerPawn = nullptr;
 
 	FWaterSimulator* WaterSimulator = nullptr;
-
-	// Map of all currently spawned chunks
-	TMap<FIntVector, AChunkBase*> SpawnedChunks;
+	
 
 	// Timer to periodically update chunks
 	FTimerHandle UpdateTimerHandle;
@@ -65,11 +63,12 @@ private:
 	void SpawnChunkAt(const FIntVector& Coord);
 
 	// Destroys and removes a chunk at a coordinate
-	void RemoveChunkAt(const FIntVector& Coord);
+	static void RemoveChunkAt(const FIntVector& Coord);
 
 	// Updates visible chunks around player
 	void UpdateChunks();
 	virtual void Tick(float DeltaTime) override;
+	static void FixMeshesWhereNeighborsExist(const TArray<FIntVector>& LoadedChunks);
 
 	int ChunkCount;
 	

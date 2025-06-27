@@ -45,6 +45,7 @@ protected:
 	virtual void BeginPlay() override;
 	
 	virtual void Setup() PURE_VIRTUAL(AChunkBase::Setup, );
+	virtual void LoadChunkMap () PURE_VIRTUAL(AChunkBase::LoadChunkMap, );
 	virtual void Generate2DHeightMap(const FVector Position) PURE_VIRTUAL(AChunkBase::Generate2DHeightMap, );
 	virtual void Generate3DHeightMap(const FVector Position) PURE_VIRTUAL(AChunkBase::Generate3DHeightMap, );
 	virtual void GenerateMesh() PURE_VIRTUAL(AChunkBase::GenerateMesh, );
@@ -55,6 +56,8 @@ protected:
 	TObjectPtr<UProceduralMeshComponent> Mesh;
 	FastNoiseLite* Noise;
 	FastNoiseLite* BiomeNoise;
+	FastNoiseLite* RiverNoise;
+	FastNoiseLite* LakeNoise;
 	FChunkMeshData MeshData;
 	int VertexCount = 0;
 
@@ -63,7 +66,7 @@ protected:
 
 	UPROPERTY()
 	TArray<int32> VertexCountPerMat;
-
+	
 private:
 	void ApplyMesh() const;
 	void ClearMesh();

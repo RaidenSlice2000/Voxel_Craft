@@ -35,7 +35,7 @@ void FWaterSimulator::EnqueueWaterBlock(const FIntVector& GlobalPosition, uint8 
 
 void FWaterSimulator::Tick(float DeltaTime)
 {
-    constexpr int32 MaxIterations = 1; // Prevent infinite loops
+    constexpr int32 MaxIterations = 100; // Prevent infinite loops
     int32 IterationCount = 0;
 
     // Process water flow
@@ -93,9 +93,9 @@ void FWaterSimulator::TrySpread(const FIntVector& Position, uint8 CurrentStrengt
 
         // Convert NeighborPos to local block position inside its chunk
         FIntVector ChunkCoords(
-            FMath::FloorToInt((float)NeighborPos.X / ChunkSize.X),
-            FMath::FloorToInt((float)NeighborPos.Y / ChunkSize.Y),
-            FMath::FloorToInt((float)NeighborPos.Z / ChunkSize.Z)
+            FMath::FloorToInt(static_cast<float>(NeighborPos.X) / ChunkSize.X),
+            FMath::FloorToInt(static_cast<float>(NeighborPos.Y) / ChunkSize.Y),
+            FMath::FloorToInt(static_cast<float>(NeighborPos.Z) / ChunkSize.Z)
         );
         FIntVector ChunkOrigin = ChunkCoords * ChunkSize;
         FIntVector LocalBlockPos = NeighborPos - ChunkOrigin;

@@ -37,6 +37,8 @@ class AGreedyChunk final : public AChunkBase
 		int Normal;
 	};
 public:
+	void InitializeChunkOrigin(const FIntVector& Coords);
+
 	EBlock GetBlock(FIntVector Index) const;
 	void SetWaterSimulator(FWaterSimulator* InSimulator);
 	bool IsInsideChunk(const FIntVector& Position) const;
@@ -45,9 +47,11 @@ public:
 	static AGreedyChunk* GetChunkAt(const FIntVector& WorldBlockPosition, const FIntVector& ChunkPosition);
 	void SetBlockAt(const FIntVector& Position, EBlock BlockType);
 	void SetMeta(const FIntVector& Position, uint8 MetaValue);
+	virtual void UpdateMesh() override;
 
 	static TMap<FIntVector, AGreedyChunk*> LoadedChunks;
-
+	FIntVector GridCoord;
+	
 protected:
 	virtual void Setup() override;
 	static float GetFractalNoise2D(FastNoiseLite* Noise, float X, float Y, float Frequency, int Octaves, float Persistence);
@@ -55,7 +59,9 @@ protected:
 	virtual void Generate3DHeightMap(FVector Position) override;
 	virtual void GenerateMesh() override;
 	virtual void ModifyVoxelData(FIntVector Position, EBlock Block) override;
-
+	virtual void LoadChunkMap() override;
+	EBlock GetBlockWithNeighbors(const FIntVector& Pos) const;
+	
 private:
 
 	FWaterSimulator* WaterSimulator = nullptr;
@@ -81,5 +87,4 @@ private:
 	int GetTextureIndex(EBlock Block, const FVector& Normal, const FIntVector& BlockPos) const;
 	void SpawnTreeAt(int x, int y, int z, const FRandomStream& TreeRand);
 	void SpawnCactusAt(int x, int y, int z);
-	
 };
