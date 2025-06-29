@@ -8,7 +8,6 @@
 #include "Voxel_Craft/Utils/FastNoiseLite.h"
 
 TMap<FIntVector, AGreedyChunk*> AGreedyChunk::LoadedChunks;
-FIntVector GridCoord;
 
 void AGreedyChunk::Setup()
 {
@@ -452,11 +451,11 @@ void AGreedyChunk::GenerateMesh()
 
 					EBlock CurrentBlock = IsInsideChunk(ChunkItr)
 						? GetBlock(ChunkItr)
-						: GetBlockWithNeighbors(ChunkItr + ChunkOrigin);
+						: GetBlockWithNeighbors(ChunkItr );
 
 					EBlock CompareBlock = IsInsideChunk(ComparePos)
 						? GetBlock(ComparePos)
-						: GetBlockWithNeighbors(ComparePos + ChunkOrigin);
+						: GetBlockWithNeighbors(ComparePos);
 					
 					const bool CurrentBlockIsSolid = (CurrentBlock != EBlock::Air && CurrentBlock != EBlock::Water);
 					const bool CompareBlockIsSolid = (CompareBlock != EBlock::Air && CompareBlock != EBlock::Water);
@@ -686,21 +685,21 @@ int AGreedyChunk::GetBlockIndex( int X,  int Y,  int Z) const
 
 void AGreedyChunk::InitializeChunkOrigin(const FIntVector& Coords)
 {
-	ChunkOrigin = FIntVector(Coords.X * ChunkSize.X, Coords.Y * ChunkSize.Y, Coords.Z * ChunkSize.Z);
+	ChunkOrigin = FIntVector(Coords.X * ChunkSize.X*100, Coords.Y * ChunkSize.Y*100, Coords.Z * ChunkSize.Z*100);
 	
 
-	FIntVector ChunkCoords(FMath::FloorToInt(static_cast<float>(ChunkOrigin.X) / ChunkSize.X),
-							 FMath::FloorToInt(static_cast<float>(ChunkOrigin.Y) / ChunkSize.Y),
-							 FMath::FloorToInt(static_cast<float>(ChunkOrigin.Z) / ChunkSize.Z));
+	FIntVector ChunkCoords(FMath::FloorToInt(static_cast<float>(ChunkOrigin.X) / (ChunkSize.X * 100)),
+							FMath::FloorToInt(static_cast<float>(ChunkOrigin.Y) / (ChunkSize.Y * 100)),
+							FMath::FloorToInt(static_cast<float>(ChunkOrigin.Z) / (ChunkSize.Z * 100)));
 	UE_LOG(LogTemp, Warning, TEXT("INITIALIZE ORIGIN: ChunkCoords (%d,%d,%d), ChunkOrigin (%d,%d,%d)"),
 		   ChunkCoords.X, ChunkCoords.Y, ChunkCoords.Z,
 		   ChunkOrigin.X, ChunkOrigin.Y, ChunkOrigin.Z);
-	LoadedChunks.Add(ChunkCoords, this);
-	
+	DrawDebugBox(GetWorld(), FVector(ChunkOrigin), FVector(ChunkSize.X * 100, ChunkSize.Y * 100, ChunkSize.Z * 100), FColor::Red, true, 10.0f);
 }
 
 EBlock AGreedyChunk::GetBlock(const FIntVector LocalPos) const
 {
+	
 	if (LocalPos.X >= 0 && LocalPos.X < ChunkSize.X &&
 	   LocalPos.Y >= 0 && LocalPos.Y < ChunkSize.Y &&
 	   LocalPos.Z >= 0 && LocalPos.Z < ChunkSize.Z)
@@ -726,10 +725,16 @@ EBlock AGreedyChunk::GetBlock(const FIntVector LocalPos) const
 
 	if (auto* NeighborChunk = LoadedChunks.Find(NeighborCoords))
 	{
+		UE_LOG(LogTemp, Warning, TEXT("Found neighbor chunk at %d,%d,%d"), NeighborCoords.X, NeighborCoords.Y, NeighborCoords.Z);
+
 		return (*NeighborChunk)->Blocks[GetBlockIndex(NeighborLocalPos.X, NeighborLocalPos.Y, NeighborLocalPos.Z)];
 	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Missing neighbor chunk at %d,%d,%d, treating as Air"), NeighborCoords.X, NeighborCoords.Y, NeighborCoords.Z);
+		return EBlock::Air;
+	}
 	// If no neighbor chunk, treat as air (so the face is rendered)
-	return EBlock::Air;
 }
 
 void AGreedyChunk::SetWaterSimulator(FWaterSimulator* InSimulator)
@@ -1013,38 +1018,33 @@ void AGreedyChunk::SetMeta(const FIntVector& Position, uint8 MetaValue)
 	int32 Index = LocalPos.Z * ChunkSize.X * ChunkSize.Y + LocalPos.Y * ChunkSize.X + LocalPos.X;
 	BlockMeta[Index] = MetaValue;
 }
-void AGreedyChunk::LoadChunkMap()
-{
-	InitializeChunkOrigin(GridCoord);
-	FIntVector ChunkCoords(
-	   FMath::FloorToInt(static_cast<float>(ChunkOrigin.X) / ChunkSize.X),
-	   FMath::FloorToInt(static_cast<float>(ChunkOrigin.Y) / ChunkSize.Y),
-	   FMath::FloorToInt(static_cast<float>(ChunkOrigin.Z) / ChunkSize.Z)
-   );
-	LoadedChunks.Add(ChunkCoords, this);
-	UE_LOG(LogTemp, Warning, TEXT("LoadedChunks Add Key: (%d, %d, %d)"), ChunkCoords.X, ChunkCoords.Y, ChunkCoords.Z);
-}
 EBlock AGreedyChunk::GetBlockWithNeighbors(const FIntVector& Pos) const
 {
+	
 	if (IsInsideChunk(Pos))
 	{
 		return Blocks[GetBlockIndex(Pos.X, Pos.Y, Pos.Z)];
 	}
 
-	// Convert global Pos to the chunk that contains it
-	FIntVector WorldPos = ChunkOrigin + Pos;
-	int32 NeighborX = FMath::FloorToInt(static_cast<float>(WorldPos.X) / ChunkSize.X);
-	int32 NeighborY = FMath::FloorToInt(static_cast<float>(WorldPos.Y) / ChunkSize.Y);
-	int32 NeighborZ = FMath::FloorToInt(static_cast<float>(WorldPos.Z) / ChunkSize.Z);
+	check(ChunkSize.X != 0 && ChunkSize.Y != 0 && ChunkSize.Z != 0);
 
+	
+	// Convert global Pos to the chunk that contains it
+	FIntVector WorldBlockPos = (ChunkOrigin / 100) + Pos;  // Convert ChunkOrigin from units to blocks, then add local Pos
+
+	// Divide by (ChunkSize * 100) because you scaled by 100 units per block
+	int32 NeighborX = FMath::FloorToInt(static_cast<float>(WorldBlockPos.X) / ChunkSize.X);
+	int32 NeighborY = FMath::FloorToInt(static_cast<float>(WorldBlockPos.Y) / ChunkSize.Y);
+	int32 NeighborZ = FMath::FloorToInt(static_cast<float>(WorldBlockPos.Z) / ChunkSize.Z);
 	FIntVector NeighborChunkCoords(NeighborX, NeighborY, NeighborZ);
+	
 	AGreedyChunk** NeighborChunkPtr = LoadedChunks.Find(NeighborChunkCoords);
 	if (!NeighborChunkPtr || !*NeighborChunkPtr) return EBlock::Air;
 
 	AGreedyChunk* NeighborChunk = *NeighborChunkPtr;
 
 	// Get local position relative to that neighbor chunk
-	FIntVector LocalPos = WorldPos - NeighborChunk->ChunkOrigin;
+	FIntVector LocalPos = WorldBlockPos - (NeighborChunk->ChunkOrigin / 100);
 
 	if (!NeighborChunk->IsInsideChunk(LocalPos)) return EBlock::Air;
 

@@ -30,9 +30,9 @@ void AChunkWorld::BeginPlay()
 	WaterSimulator->SetChunkFetcher([this](const FIntVector& Position) -> AGreedyChunk*
 	{
 		// Block coordinates to chunk index
-		int32 ChunkX = FMath::FloorToInt(static_cast<float>(Position.X / ChunkSize.X ));
-		int32 ChunkY = FMath::FloorToInt(static_cast<float>(Position.Y / ChunkSize.Y ));
-		int32 ChunkZ = FMath::FloorToInt(static_cast<float>(Position.Z / ChunkSize.Z ));
+		int32 ChunkX = FMath::FloorToInt(static_cast<float>(Position.X / (ChunkSize.X * 100)));
+		int32 ChunkY = FMath::FloorToInt(static_cast<float>(Position.Y / (ChunkSize.Y * 100)));
+		int32 ChunkZ = FMath::FloorToInt(static_cast<float>(Position.Z / (ChunkSize.Z * 100)));
 		FIntVector ChunkCoords(ChunkX, ChunkY, (GenerationType == EGenerationType::GT_3D) ? ChunkZ : 0);
 
 		bool bFound = AGreedyChunk::LoadedChunks.Contains(ChunkCoords);
@@ -104,8 +104,6 @@ void AChunkWorld::Generate3DWorld()
 
 void AChunkWorld::Generate2DWorld()
 {
-	TArray<AGreedyChunk*> AllChunks;
-
 	// STEP 1: Spawn all chunks (no mesh yet)
 	for (int x = -DrawDistance; x <= DrawDistance; x++)
 	{
@@ -127,39 +125,26 @@ void AChunkWorld::Generate2DWorld()
 				this
 			);
 
-			Chunk->GridCoord = Coord;
 			Chunk->ChunkSize = ChunkSize;
 			Chunk->Frequency = Frequency;
 			Chunk->Materials = Materials;
 			Chunk->SetSeed(Seed);
 			Chunk->GenerationType = EGenerationType::GT_2D;
 
-			if (WaterSimulator)
+			Chunk->bShouldGenerateInitialMesh = false;
+
+			
+			if (!WaterSimulator)
 			{
 				Chunk->SetWaterSimulator(WaterSimulator);
 			}
+			Chunk->InitializeChunkOrigin(Coord);
 
 			UGameplayStatics::FinishSpawningActor(Chunk, Transform);
-			AllChunks.Add(Chunk);
+			AGreedyChunk::LoadedChunks.Add(Coord, Chunk);
+			ChunkCount++;
 		}
 	}
-
-	// STEP 2: Initialize chunks (so neighbors exist when mesh is built)
-	for (AGreedyChunk* Chunk : AllChunks)
-	{
-		if (!Chunk) continue;
-		Chunk->UpdateMesh();
-	}
-
-	// STEP 3: Now build the mesh (neighbors are all registered)
-	for (AGreedyChunk* Chunk : AllChunks)
-	{
-		if (!Chunk) continue;
-		Chunk->UpdateMesh();
-
-	}
-
-	ChunkCount += AllChunks.Num();
 }
 FIntVector AChunkWorld::WorldToChunkCoord(const FVector& Location) const
 {
@@ -173,13 +158,20 @@ FIntVector AChunkWorld::WorldToChunkCoord(const FVector& Location) const
 }
 void AChunkWorld::SpawnChunkAt(const FIntVector& Coord)
 {
-	if (!ChunkType) return;
+	
+	UE_LOG(LogTemp, Warning, TEXT("SpawnChunkAt called for Coord X=%d Y=%d Z=%d"), Coord.X, Coord.Y, Coord.Z);
+
+	if (!ChunkType)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ChunkType is null!"));
+		return;
+	}
 
 	if (AGreedyChunk::LoadedChunks.Contains(Coord))
 	{
+		UE_LOG(LogTemp, Warning, TEXT("Chunk already loaded at Coord X=%d Y=%d Z=%d"), Coord.X, Coord.Y, Coord.Z);
 		return; // Do nothing if the chunk is already spawned
 	}
-
 	
 	FVector SpawnLocation = FVector(Coord.X, Coord.Y, Coord.Z) * FVector(ChunkSize.X, ChunkSize.Y, ChunkSize.Z) * 100.0f;
 
@@ -188,13 +180,15 @@ void AChunkWorld::SpawnChunkAt(const FIntVector& Coord)
 
 	if (AGreedyChunk* GreedyChunk = Cast<AGreedyChunk>(Chunk))
 	{
-		GreedyChunk->GridCoord = Coord;
 
 		GreedyChunk->GenerationType = EGenerationType::GT_2D;
 		GreedyChunk->Frequency = Frequency;
 		GreedyChunk->Materials = Materials;
 		GreedyChunk->ChunkSize = ChunkSize;
 		GreedyChunk->SetSeed(Seed);
+        GreedyChunk->bShouldGenerateInitialMesh = false; // Add this
+
+		GreedyChunk->InitializeChunkOrigin(Coord);
 	}
 	else
 	{
@@ -211,6 +205,8 @@ void AChunkWorld::SpawnChunkAt(const FIntVector& Coord)
 	if (AGreedyChunk* Greedy = Cast<AGreedyChunk>(Chunk))
 	{
 		Greedy->SetWaterSimulator(WaterSimulator);
+		AGreedyChunk::LoadedChunks.Add(Coord, Greedy);
+
 	}
 	FixMeshesWhereNeighborsExist({Coord, Coord + FIntVector(1,0,0), Coord + FIntVector(-1,0,0), Coord + FIntVector(0,1,0), Coord + FIntVector(0,-1,0)});
 }
@@ -219,9 +215,9 @@ void AChunkWorld::RemoveChunkAt(const FIntVector& Coord)
 	if (AChunkBase* Chunk = AGreedyChunk::LoadedChunks.FindRef(Coord))
 	{
 		Chunk->Destroy();
+		AGreedyChunk::LoadedChunks.Remove(Coord);  // <--- Remove from map here!
 	}
 	FixMeshesWhereNeighborsExist({Coord, Coord + FIntVector(1,0,0), Coord + FIntVector(-1,0,0), Coord + FIntVector(0,1,0), Coord + FIntVector(0,-1,0)});
-
 }
 void AChunkWorld::UpdateChunks()
 {
@@ -240,9 +236,10 @@ void AChunkWorld::UpdateChunks()
 			{
 				FIntVector Coord = CenterCoord + FIntVector(x, y, z);
 				DesiredCoords.Add(Coord);
-
-				if (!AGreedyChunk::LoadedChunks.FindRef(Coord))
+				
+				if (!AGreedyChunk::LoadedChunks.Contains(Coord))
 				{
+
 					SpawnChunkAt(Coord);
 				}
 			}
@@ -276,20 +273,23 @@ void AChunkWorld::Tick(float DeltaTime)
 }
 void AChunkWorld::FixMeshesWhereNeighborsExist(const TArray<FIntVector>& Coords)
 {
+
 	for (const auto& Coord : Coords)
 	{
 		AGreedyChunk* Chunk = AGreedyChunk::LoadedChunks.FindRef(Coord);
 		if (!Chunk) continue;
 
 		bool bAllNeighborsExist =
-			AGreedyChunk::LoadedChunks.Contains(Coord + FIntVector(1, 0, 0)) &&
-			AGreedyChunk::LoadedChunks.Contains(Coord + FIntVector(-1, 0, 0)) &&
-			AGreedyChunk::LoadedChunks.Contains(Coord + FIntVector(0, 1, 0)) &&
-			AGreedyChunk::LoadedChunks.Contains(Coord + FIntVector(0, -1, 0));
+				AGreedyChunk::LoadedChunks.Contains(Coord + FIntVector(1, 0, 0)) &&
+				AGreedyChunk::LoadedChunks.Contains(Coord + FIntVector(-1, 0, 0)) &&
+				AGreedyChunk::LoadedChunks.Contains(Coord + FIntVector(0, 1, 0)) &&
+				AGreedyChunk::LoadedChunks.Contains(Coord + FIntVector(0, -1, 0));
 
 		if (bAllNeighborsExist)
 		{
+			Chunk->bShouldGenerateInitialMesh = true;
 			Chunk->UpdateMesh();
+			UE_LOG(LogTemp, Warning, TEXT("Updated mesh for chunk %d,%d,%d"), Coord.X, Coord.Y, Coord.Z);
 		}
 	}
 }

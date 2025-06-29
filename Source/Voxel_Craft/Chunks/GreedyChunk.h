@@ -50,8 +50,6 @@ public:
 	virtual void UpdateMesh() override;
 
 	static TMap<FIntVector, AGreedyChunk*> LoadedChunks;
-	FIntVector GridCoord;
-	
 protected:
 	virtual void Setup() override;
 	static float GetFractalNoise2D(FastNoiseLite* Noise, float X, float Y, float Frequency, int Octaves, float Persistence);
@@ -59,7 +57,6 @@ protected:
 	virtual void Generate3DHeightMap(FVector Position) override;
 	virtual void GenerateMesh() override;
 	virtual void ModifyVoxelData(FIntVector Position, EBlock Block) override;
-	virtual void LoadChunkMap() override;
 	EBlock GetBlockWithNeighbors(const FIntVector& Pos) const;
 	
 private:

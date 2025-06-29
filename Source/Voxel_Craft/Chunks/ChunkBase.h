@@ -37,7 +37,9 @@ public:
 	void ModifyVoxel(FIntVector Position, EBlock Block);
 	
 	void SetSeed(int32 InSeed) { Seed = InSeed; }
-	
+
+	bool bShouldGenerateInitialMesh = true;
+	bool bHasBeenMeshedWithNeighbors = false;
 
 	
 protected:
@@ -45,7 +47,6 @@ protected:
 	virtual void BeginPlay() override;
 	
 	virtual void Setup() PURE_VIRTUAL(AChunkBase::Setup, );
-	virtual void LoadChunkMap () PURE_VIRTUAL(AChunkBase::LoadChunkMap, );
 	virtual void Generate2DHeightMap(const FVector Position) PURE_VIRTUAL(AChunkBase::Generate2DHeightMap, );
 	virtual void Generate3DHeightMap(const FVector Position) PURE_VIRTUAL(AChunkBase::Generate3DHeightMap, );
 	virtual void GenerateMesh() PURE_VIRTUAL(AChunkBase::GenerateMesh, );

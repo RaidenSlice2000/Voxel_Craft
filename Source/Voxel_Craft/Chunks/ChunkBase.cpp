@@ -7,6 +7,8 @@
 // Sets default values
 AChunkBase::AChunkBase()
 {
+	bHasBeenMeshedWithNeighbors = false;
+	bShouldGenerateInitialMesh = false;
 	// Set this actor to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
 	PrimaryActorTick.bCanEverTick = false;
 
@@ -64,15 +66,17 @@ void AChunkBase::BeginPlay()
 	Setup();
 	
 	GenerateHeightMap();
-
-	LoadChunkMap();
 	
-	ClearMesh();
-	
-	GenerateMesh();
-	
-	ApplyMesh();
-
+	if (bShouldGenerateInitialMesh)
+	{
+		ClearMesh();
+		GenerateMesh();
+		ApplyMesh();
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Skipped initial mesh generation because bShouldGenerateInitialMesh is false"));
+	}
 }
 
 void AChunkBase::GenerateHeightMap()
@@ -156,10 +160,19 @@ void AChunkBase::ModifyVoxel(const FIntVector Position, const EBlock Block)
 }
 void AChunkBase::UpdateMesh()
 {
+	if (bHasBeenMeshedWithNeighbors)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Skipping UpdateMesh because chunk already meshed with neighbors"));
+		return;
+	}
 	// Default update: regenerate mesh data and apply it
     ClearMesh();
 	
 	GenerateMesh(); // Call your existing virtual GenerateMesh function that builds the mesh data
     
 	ApplyMesh();    // Call your private ApplyMesh function that applies MeshData to the procedural mesh component
+
+
+	bHasBeenMeshedWithNeighbors = true;
+
 }
